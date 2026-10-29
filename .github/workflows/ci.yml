@@ -71,7 +71,7 @@ jobs:
                 ("docker pull " + $image),
                 "docker rm -f learnit-app",
                 ("docker run -d --name learnit-app --restart unless-stopped -p 8000:8000 -e APP_VERSION=" + $version + " " + $image),
-                "curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/health"
+                "curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/health"
               ],
               executionTimeout: ["300"]
             }')
