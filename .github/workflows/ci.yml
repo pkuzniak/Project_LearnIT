@@ -101,3 +101,83 @@ jobs:
             --instance-id "$INSTANCE_ID" \
             --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
             --output json
+
+
+
+#Autmoanion notifications on builds:
+
+
+  notify:
+    name: Send email notification
+    needs: [build, deploy]
+    if: ${{ always() && vars.MAIL_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    permissions: {}
+
+    env:
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+      MAIL_TO: example321@example.com
+      BUILD_RESULT: ${{ needs.build.result }}
+      DEPLOY_RESULT: ${{ needs.deploy.result }}
+      BRANCH: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Send pipeline result through SMTP
+        shell: python
+        run: |
+          import os
+          import smtplib
+          import ssl
+          from email.message import EmailMessage
+
+          required = [
+              "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME",
+              "SMTP_PASSWORD", "MAIL_FROM", "MAIL_TO"
+          ]
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit("Missing configuration: " + ", ".join(missing))
+
+          message = EmailMessage()
+          message["Subject"] = (
+              f"LearnIT: build={os.environ['BUILD_RESULT']}, "
+              f"deploy={os.environ['DEPLOY_RESULT']}"
+          )
+          message["From"] = os.environ["MAIL_FROM"]
+          message["To"] = os.environ["MAIL_TO"]
+          message.set_content(
+              f"Branch: {os.environ['BRANCH']}\n"
+              f"Commit: {os.environ['COMMIT']}\n"
+              f"Build: {os.environ['BUILD_RESULT']}\n"
+              f"Deployment: {os.environ['DEPLOY_RESULT']}\n"
+              f"Details: {os.environ['RUN_URL']}\n"
+          )
+
+          host = os.environ["SMTP_HOST"]
+          port = int(os.environ["SMTP_PORT"])
+          context = ssl.create_default_context()
+
+          if port == 465:
+              server = smtplib.SMTP_SSL(
+                  host, port, timeout=30, context=context
+              )
+          else:
+              server = smtplib.SMTP(host, port, timeout=30)
+              server.starttls(context=context)
+
+          with server:
+              server.login(
+                  os.environ["SMTP_USERNAME"],
+                  os.environ["SMTP_PASSWORD"]
+              )
+              server.send_message(message)
+
+          print("Email notification sent.")
