@@ -34,3 +34,70 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/pkuzniak/Project_LearnIT
             org.opencontainers.image.revision=${{ github.sha }}
+
+  deploy:
+    name: Deploy to EC2
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    concurrency:
+      group: production-deployment
+      cancel-in-progress: false
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: eu-north-1
+      AWS_PAGER: ""
+      INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      APP_VERSION: ${{ github.sha }}
+
+    steps:
+      - name: Deploy image through Systems Manager
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="ghcr.io/pkuzniak/project_learnit:${APP_VERSION}"
+
+          PARAMETERS=$(jq -n \
+            --arg image "$IMAGE" \
+            --arg version "$APP_VERSION" \
+            '{
+              commands: [
+                "set -eu",
+                ("docker pull " + $image),
+                "docker rm -f learnit-app",
+                ("docker run -d --name learnit-app --restart unless-stopped -p 8000:8000 -e APP_VERSION=" + $version + " " + $image),
+                "curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 2 http://127.0.0.1:8000/health"
+              ],
+              executionTimeout: ["300"]
+            }')
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters "$PARAMETERS" \
+            --comment "Deploy LearnIT ${APP_VERSION}" \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "SSM command: $COMMAND_ID"
+
+          if ! aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID"; then
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --output json
+            exit 1
+          fi
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
+            --output json
